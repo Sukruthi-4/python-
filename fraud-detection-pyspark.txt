@@ -1,0 +1,51 @@
+# Install PySpark (only first time)
+!pip install pyspark
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, when, abs
+
+# Start Spark
+spark = SparkSession.builder.appName("SmartFraudDetector").getOrCreate()
+
+# Load file (IMPORTANT PATH)
+data = spark.read.csv("/content/transactions.csv", header=True, inferSchema=True)
+
+# Select columns
+data = data.select("amount", "oldbalanceOrg", "newbalanceOrig", "isFraud")
+
+# Handle missing values
+data = data.na.fill({
+    "amount": 0,
+    "oldbalanceOrg": 1,
+    "newbalanceOrig": 0
+})
+
+# Feature engineering (unique)
+data = data.withColumn("balance_change", col("oldbalanceOrg") - col("newbalanceOrig"))
+data = data.withColumn("amount_ratio", col("amount") / col("oldbalanceOrg"))
+data = data.withColumn("sudden_drop", abs(col("balance_change")) > (0.8 * col("oldbalanceOrg")))
+
+# Custom fraud score (unique logic)
+data = data.withColumn("fraud_score",
+    when(col("amount") > 2000, 1).otherwise(0) +
+    when(col("amount_ratio") > 0.7, 1).otherwise(0) +
+    when(col("sudden_drop") == True, 1).otherwise(0)
+)
+
+# Prediction
+data = data.withColumn("prediction",
+    when(col("fraud_score") >= 2, 1).otherwise(0)
+)
+
+# Label
+data = data.withColumn("label", col("isFraud").cast("int"))
+
+# Accuracy
+correct = data.filter(col("prediction") == col("label")).count()
+total = data.count()
+
+accuracy = correct / total
+
+# Output
+data.show()
+print("Accuracy:", accuracy)
